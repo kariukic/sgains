@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "sgains"
-version = "0.1"
+version = "0.1.0"
 description = "Ingest and analyse sagecal calibration gains"
 authors = ["Kariuki Chege <jameskariuki31@gmail.com>"]
 readme = "README.md"
