@@ -1,10 +1,10 @@
 [tool.poetry]
-name = "sge"
+name = "sgains"
 version = "0.1"
 description = "Sagecal Gains Explorer"
 authors = ["Kariuki Chege <jameskariuki31@gmail.com>"]
 readme = "README.md"
-packages = [{ include = "sge" }]
+packages = [{ include = "sgains" }]
 
 [tool.poetry.dependencies]
 python = "^3.10"
