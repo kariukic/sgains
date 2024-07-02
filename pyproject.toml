@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "sgains"
 version = "0.1"
-description = "Sagecal Gains Explorer"
+description = "Ingest and analyse sagecal calibration gains"
 authors = ["Kariuki Chege <jameskariuki31@gmail.com>"]
 readme = "README.md"
 packages = [{ include = "sgains" }]
