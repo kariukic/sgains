@@ -54,7 +54,7 @@ class Solutions:
         logging.info(f"Combining solutions into numpy format")
         (
             self.data,
-            self.all_freqs,
+            self.freq_mhz,
             self.nClustEff,
             self.bandwidth,
             self.sol_timestep,
@@ -78,26 +78,66 @@ class Solutions:
             self.data.shape[0] - 1
         )
         logging.info(f"MS mean timestep (s): {self.meantimestep}")
-        logging.info("Reading done!")
 
+        logging.info(f"Reading cluster IDs")
         self.cluster_ids = self.file_handler.get_cluster_ids(self.cluster_file)
 
+        logging.info(f"Making gains_dict object")
+        mgd = makeGainsDict(self.data, self.stations, self.eff_nr)
+        self.gains_dict = mgd.get_all_gains(clusters=self.cluster_ids)
+
+        logging.info(f"Averaging out effective cluster sizes")
+        self.gains = self.get_equal_ntstep_gains()
+
+        logging.info(f"Making the plotting object")
         self.plot = PlotGains(
-            self.data,
-            self.all_freqs,
+            self.gains,
+            self.freq_mhz,
             self.time_s,
             self.stations,
             self.cluster_ids,
             self.eff_nr,
+            self.bandwidth,
         )
+
+        logging.info("Reading done!")
+
+    def get_equal_ntstep_gains(self):
+        ggs = np.zeros(
+            (
+                len(self.time_s),
+                len(self.stations),
+                len(self.freq_mhz),
+                4,
+                len(self.cluster_ids),
+            ),
+            dtype=np.complex64,
+        )
+
+        for p, pol in enumerate(["XX", "XY", "YX", "YY"]):
+            for s, station in enumerate(self.stations):
+                sgs = np.zeros(
+                    (len(self.time_s), len(self.freq_mhz), len(self.cluster_ids)),
+                    dtype=np.complex128,
+                )
+                for clst, eff in zip(self.cluster_ids.values(), self.eff_nr):
+                    g = self.gains_dict[(station, clst)][pol].reshape(
+                        eff, -1, len(self.freq_mhz)
+                    )
+                    gs = np.average(g, axis=0)
+                    sgs[..., clst] = gs
+
+                ggs[:, s, :, p, :] = sgs
+
+        return ggs
 
     def get_clusters_details(self, sky_model):
         clusters_info, _ = self.file_handler.getClusters(self.cluster_file, sky_model)
         return clusters_info
 
-    def make_gains_dict(self):
-        mgd = makeGainsDict(self.data, self.stations, self.eff_nr)
-        return mgd.get_all_gains(clusters=self.cluster_ids)
+    # def make_gains_dict(self):
+    #     mgd = makeGainsDict(self.data, self.stations, self.eff_nr)
+    #     return mgd.get_all_gains(clusters=self.cluster_ids)
 
     def get_eff_nr(self):
         nrs = []
@@ -106,36 +146,6 @@ class Solutions:
                 nr = int(data.strip().split()[1])
                 nrs.append(nr)
         return np.asarray(nrs)
-
-    # def plot_bl_gains(self, baselines, cluster_id=0):
-    #     pg = PlotGains(self.data, self.all_freqs)
-    #     return pg.baselines_abs_and_phase(baselines, cluster_id=cluster_id)
-
-    # def plot_mean_and_std(
-    #     self,
-    #     avg_type="stations",
-    #     n_time_avg=40,
-    #     max_station=62,
-    #     cluster_id=0,
-    #     prefix="",
-    #     out_dir=None,
-    # ):
-    #     pg = PlotGains(self.data, self.all_freqs)
-    #     pg.mean_and_std(
-    #         cluster_id=cluster_id,
-    #         avg_type=avg_type,
-    #         n_time_avg=n_time_avg,
-    #         max_station=max_station,
-    #         prefix=prefix,
-    #         out_dir=out_dir,
-    #     )
-
-    # def plot_that_dd(self):
-    #     gains_dict = self.make_gains_dict()
-    #     pg = PlotGains(self.data, self.all_freqs)
-    #     pg.do_plot(
-    #         gains_dict,
-    #     )
 
     def write_to_disk(self, global_sols_file="", outdir=""):
 
@@ -153,7 +163,7 @@ class Solutions:
         self.file_handler.save_to_numpy_format(
             self.data,
             file_prefix,
-            self.all_freqs,
+            self.freq_mhz,
             self.cluster_Nsols_per_Tstep,
             self.nClustEff,
             self.timerange,
@@ -180,7 +190,7 @@ class Solutions:
         #         self.n_eff_clus,
         #         self.z_sol,
         #     ) = self.file_handler.read_global_solutions(
-        #         global_sols_file, len(self.all_freqs)
+        #         global_sols_file, len(self.freq_mhz)
         #     )
 
         #     logging.info(f"Converting global solutions")

@@ -1,5 +1,5 @@
 """
-Module to read, transform, write and plot sagecal solutions
+CLI module to read, transform, write and plot sagecal solutions
 """
 
 import os

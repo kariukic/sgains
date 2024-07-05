@@ -13,7 +13,7 @@ class makeGainsDict:
         self.stations = stations
         self.eff_nr = eff_nr
         self.pols = {"XX": [0, 0], "YY": [1, 1], "XY": [0, 1], "YX": [1, 0]}
-        self.pol_stokes = {"I": [0, 0], "V": [1, 1], "U": [0, 1], "Q": [1, 0]}
+        # self.pol_stokes = {"I": [0, 0], "V": [1, 1], "U": [0, 1], "Q": [1, 0]}
 
     def get_gains(self, cluster, station):
         if cluster == 0:
@@ -63,16 +63,16 @@ class makeGainsDict:
                 # ref_g = self.get_gains(d, c, ref_station, self.eff_nr)
                 g = self.get_gains(c, s_idx)  # / ref_g
                 gg = GainsUtils.g_mul(g, g, np.eye(2))
-                I, Q, U, V = GainsUtils.cov2stokes(gg)
-                gg_stokes = np.stack(
-                    [np.stack([I, Q], axis=-1), np.stack([U, V], axis=-1)], axis=-1
-                )
+                # I, Q, U, V = GainsUtils.cov2stokes(gg)
+                # gg_stokes = np.stack(
+                #     [np.stack([I, Q], axis=-1), np.stack([U, V], axis=-1)], axis=-1
+                # )
 
                 for pol_name, (i, j) in self.pols.items():
                     gains[(s, c)][pol_name] = g[:, :, i, j]
                     gains[(s, c)]["gg_" + pol_name] = gg[:, :, i, j]
-                for pol_name, (i, j) in self.pol_stokes.items():
-                    gains[(s, c)]["gg_" + pol_name] = gg_stokes[:, :, i, j]
+                # for pol_name, (i, j) in self.pol_stokes.items():
+                #     gains[(s, c)]["gg_" + pol_name] = gg_stokes[:, :, i, j]
 
         return gains
 

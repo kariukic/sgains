@@ -6,6 +6,7 @@ import astropy.stats as astats
 from astropy.stats import mad_std
 from astropy.coordinates import SkyCoord
 import astropy.units as u
+from scipy.spatial import ConvexHull
 
 from abc import ABC, abstractmethod
 
@@ -18,51 +19,18 @@ from processor import GainsUtils
 from filesIO import FileIOHandler as fh
 
 
-class GainsPlotMaker(ABC):
-
-    def __init__(self, data, freqs, stations, clusters_ids, eff_nr) -> None:
-        self.data = data
-        self.clusters_ids = clusters_ids
-        self.eff_nr = eff_nr
-        self.stations = stations
-        self.freqs = freqs
-        self.fmin = self.freqs.min()
-        self.fmax = self.freqs.max()
-        self.pols = {"XX": [0, 0], "YY": [1, 1], "XY": [0, 1], "YX": [1, 0]}
-        self.pol_stokes = {"I": [0, 0], "V": [1, 1], "U": [0, 1], "Q": [1, 0]}
-
-    @staticmethod
-    def reshape_gains_data(data):
-        data = data[:, :, :, :, :, 0] + 1j * data[:, :, :, :, :, 1]
-        data = data.transpose(0, 1, 2, 4, 3)
-        data = data.reshape(*(list(data.shape[:-1]) + [2, 2]))
-
-    def get_gains(self, data, cluster, station, eff_nr):
-        if cluster == 0:
-            c_id = slice(None, int(eff_nr.cumsum()[cluster]))
-        else:
-            c_id = slice(
-                int(eff_nr.cumsum()[cluster - 1]), int(eff_nr.cumsum()[cluster])
-            )
-
-        s = data[:, station, :, c_id]
-        s = s.transpose(0, 2, 1, 3, 4)
-        s = np.concatenate(s)
-
-        return s
-
-
 class PlotGains:
-    def __init__(self, data, freqs, time, stations, clusters_ids, eff_nr):
-        self.data = data
+    def __init__(self, gains, freqs, time, stations, clusters_ids, eff_nr, dnu):
+        self.gains = gains
         self.freqs = freqs
         self.time = time / 3600
         self.stations = stations
         self.clusters_ids = clusters_ids
         self.eff_nr = eff_nr
+        self.dnu = dnu * 1e3
         self.pols = {"XX": [0, 0], "YY": [1, 1], "XY": [0, 1], "YX": [1, 0]}
 
-        logging.debug(f"data, {data.shape}")
+        logging.debug(f"data, {gains.shape}")
 
     @staticmethod
     def avg_gg(a, n=2):
@@ -72,12 +40,9 @@ class PlotGains:
     def baselines_abs_and_phase(
         self, station_pairs, cluster_id, out_dir=None, prefix=""
     ):
-        d = (
-            self.data[:, :, :, :, cluster_id, 0]
-            + 1j * self.data[:, :, :, :, cluster_id, 1]
-        )
-        self.d = d.reshape(*(list(d.shape[:-1]) + [2, 2]))
-        logging.debug(f"d, {self.d.shape}")
+        d = self.gains[..., cluster_id]
+        d = d.reshape(*(list(d.shape[:-1]) + [2, 2]))
+        logging.debug(f"d, {d.shape}")
         fig, axs = plt.subplots(
             ncols=4,
             nrows=len(station_pairs),
@@ -94,8 +59,8 @@ class PlotGains:
         )
 
         for i, (s1, s2) in enumerate(station_pairs):
-            g1 = self.d[:, s1]
-            g2 = self.d[:, s2]
+            g1 = d[:, s1]
+            g2 = d[:, s2]
             c = np.array([[1, 0], [0, 1]])
 
             for j, (name, (k, l)) in enumerate(self.pols.items()):
@@ -176,19 +141,13 @@ class PlotGains:
         prefix="",
         out_dir=None,
     ):
-        d = (
-            self.data[:, :, :, :, cluster_id, 0]
-            + 1j * self.data[:, :, :, :, cluster_id, 1]
-        )
-        self.d = d.reshape(*(list(d.shape[:-1]) + [2, 2]))
-        logging.debug(f"d, {self.d.shape}")
+        d = self.gains[..., cluster_id]
+        d = d.reshape(*(list(d.shape[:-1]) + [2, 2]))
+        logging.debug(f"d, {d.shape}")
 
         c = np.array([[1, 0], [0, 1]])
         gg = np.array(
-            [
-                GainsUtils.g_mul(self.d[:, i], self.d[:, i], c)
-                for i in range(self.d.shape[1])
-            ]
+            [GainsUtils.g_mul(d[:, i], d[:, i], c) for i in range(d.shape[1])]
         )
 
         if avg_type == "stations":
@@ -274,7 +233,210 @@ class PlotGains:
 
         return fig
 
-    def dynamic_spectrum(
+    def gains_spectra(self, cluster_id=0):
+
+        fig, axes = plt.subplots(ncols=1, nrows=2, figsize=(8, 5), dpi=300, sharex=True)
+
+        ccs = {"XX": "b", "XY": "r", "YX": "b", "YY": "r"}
+        rcs = {"XX": "k", "XY": "gray", "YX": "k", "YY": "gray"}
+        nax = [0, 1, 1, 0]
+
+        for p, (pol, x) in enumerate(zip(ccs.keys(), nax)):
+            ax = axes[x]
+
+            gns = np.abs(self.gains[:, :48, :, p, cluster_id])
+            rgns = np.abs(self.gains[:, 48:, :, p, cluster_id])
+
+            ax.plot(
+                self.freqs,
+                gns.mean(axis=0).T,
+                alpha=0.99,
+                c=ccs[pol],
+                lw=0.5,
+                label=pol,
+            )
+
+            ax.plot(
+                self.freqs,
+                rgns.mean(axis=0).T,
+                alpha=0.99,
+                c=rcs[pol],
+                lw=0.5,
+                label=pol,
+            )
+
+        axes[1].set_xlabel("Frequency [MHz]")
+        # axes[1].set_xlabel(r"$Frequency \; [MHz]$")
+        axes[0].set_ylabel(r"$\left\langle|g|\right\rangle_{t}$")
+        axes[1].set_ylabel(r"$\left\langle|g|\right\rangle_{t}$")
+        fig.suptitle(f"Cluster {cluster_id}: gains spectrum per station: ", fontsize=12)
+        fig.tight_layout(pad=0.4)
+        plt.show()
+
+    def gains_tseries(self, cluster_id=0):
+
+        fig, axes = plt.subplots(ncols=1, nrows=2, figsize=(8, 5), dpi=300, sharex=True)
+
+        ccs = {"XX": "b", "XY": "r", "YX": "b", "YY": "r"}
+        rcs = {"XX": "k", "XY": "gray", "YX": "k", "YY": "gray"}
+        nax = [0, 1, 1, 0]
+
+        for p, (pol, x) in enumerate(zip(ccs.keys(), nax)):
+            ax = axes[x]
+
+            gns = np.abs(self.gains[:, :48, :, p, cluster_id])
+            rgns = np.abs(self.gains[:, 48:, :, p, cluster_id])
+
+            ax.plot(
+                self.time, gns.mean(axis=2), alpha=0.99, c=ccs[pol], lw=0.5, label=pol
+            )
+
+            ax.plot(
+                self.time, rgns.mean(axis=2), alpha=0.99, c=rcs[pol], lw=0.5, label=pol
+            )
+
+        axes[1].set_yscale("log")
+        axes[0].set_yscale("log")
+        axes[1].set_xlabel("Time [hrs]")
+        axes[0].set_ylabel(r"$\left\langle|g|\right\rangle_{\nu}$")
+        axes[1].set_ylabel(r"$\left\langle|g|\right\rangle_{\nu}$")
+        fig.suptitle(f"Gains time-series per station", fontsize=12)
+        fig.tight_layout(pad=0.4)
+        plt.show()
+
+    def stations_delays(self, cluster_id=0):
+
+        fig, axes = plt.subplots(
+            ncols=2, nrows=1, figsize=(6, 2.5), dpi=300, sharey=True
+        )
+
+        cs = {"XX": "b", "XY": "r", "YX": "b", "YY": "r"}
+        nax = [0, 1, 1, 0]
+
+        for p, (pol, x) in enumerate(zip(cs.keys(), nax)):
+            ax = axes[x]
+
+            gns = np.abs(self.gains[:, :48, :, p, cluster_id])
+            rgns = np.abs(self.gains[:, 48:, :, p, cluster_id])
+
+            delay, cps = GainsUtils.get_ps(gns, self.dnu)
+            ax.plot(
+                delay * 1e3,
+                cps.mean(axis=0).T,
+                alpha=0.99,
+                c=cs[pol],
+                lw=0.5,
+                label=pol,
+            )
+
+            delay, rps = GainsUtils.get_ps(rgns, self.dnu)
+            ax.plot(
+                delay * 1e3,
+                rps.mean(axis=0).T,
+                alpha=0.99,
+                c=cs[pol],
+                lw=0.5,
+                ls="--",
+                label=pol,
+            )
+            ax.set_yscale("log")
+
+        axes[0].set_xlabel(r"$Delays \; [\mu s]$")
+        axes[1].set_xlabel(r"$Delays \; [\mu s]$")
+        # axes[0].set_ylabel(r"$\left\langleF(|g|)\right\rangle$")
+        axes[0].set_ylabel(r"$\left\langleF(|g|)\right\rangle$")
+        fig.suptitle(f"Time-averaged delay spectrum for each station", fontsize=12)
+        fig.tight_layout(pad=0.4)
+        plt.show()
+
+    def stations_gains_grid(self, cluster_id=0, ylims=[0, 2], pols=["XX"]):
+        fig, axes = plt.subplots(
+            ncols=7, nrows=10, figsize=(20, 20), dpi=300, sharey=True, sharex=True
+        )
+        axes = axes.flatten()
+        pols_idx = [0, 3, 1, 2]
+        cs = {"XX": "b", "YY": "r", "XY": "orange", "YX": "k"}
+        lss = {"XX": "-", "YY": "--", "XY": "-", "YX": "--"}
+        pols = pols if pols else cs.keys()
+        for p, (pol, idx) in enumerate(zip(pols, pols_idx)):
+
+            for ss, st in enumerate(self.stations):
+                ax = axes[ss]
+
+                gns = np.abs(self.gains[:, ss, :, idx, cluster_id]).T
+
+                ax.plot(
+                    self.freqs,
+                    gns,
+                    alpha=0.5,
+                    c=cs[pol],
+                    ls=lss[pol],
+                    lw=0.5,
+                    label=pol,
+                )
+
+                ax.text(
+                    0.05,
+                    0.95,
+                    f"{st}",
+                    transform=ax.transAxes,
+                    va="top",
+                    ha="left",
+                    fontsize=10,
+                )
+
+            ax.set_ylim(ylims[0], ylims[1])
+            ax.grid
+
+        fig.subplots_adjust(wspace=0, hspace=0)
+        plt.show()
+
+    def clusters_delays_grid(self, nstations=None, pol="XX"):
+        fig, axes = plt.subplots(
+            ncols=10, nrows=11, figsize=(15, 15), dpi=300, sharey=True, sharex=True
+        )
+        axes = axes.flatten()
+        # cs = {"XX": "b", "YY": "r", "XY": "orange", "YX": "k"}
+        lss = {"XX": "-", "XY": "-", "YX": "-", "YY": "-"}
+        for cluster_idx in range(self.gains.shape[-1]):
+            if nstations:
+                ggains = np.abs(
+                    self.gains[
+                        :, :nstations, :, list(lss.keys()).index(pol), cluster_idx
+                    ]
+                )
+            else:
+                ggains = np.abs(
+                    self.gains[..., list(lss.keys()).index(pol), cluster_idx]
+                )
+            delay, ps = GainsUtils.get_ps(ggains, self.dnu)
+            ax = axes[cluster_idx]
+            ax.text(
+                0.2,
+                0.95,
+                f"Cluster {cluster_idx}",
+                transform=ax.transAxes,
+                va="top",
+                ha="left",
+                fontsize=6,
+            )
+            ax.plot(
+                delay * 1e3,
+                ps.mean(axis=1).T,
+                alpha=0.5,
+                ls=lss[pol],
+                lw=0.5,
+                label=pol,
+                # c=cs[pol],
+            )
+
+            ax.set_yscale("log")
+            ax.set_ylim(1e-13, 1e3)
+
+        fig.subplots_adjust(wspace=0, hspace=0.1)
+        plt.show()
+
+    def dynamic_spectra(
         self,
         gain_data,
         dd_stations=[],
@@ -402,25 +564,9 @@ class PlotGains:
         clusters_info,
         station: str = None,
         pol="XX",
-        discarded: list = [
-            84,
-            85,
-            88,
-            91,
-            97,
-            100,
-            111,
-            112,
-            115,
-            117,
-            118,
-            119,
-            120,
-            121,
-        ],
+        peculiar_clusters: list = [],
+        show_cbar=False,
     ):
-
-        # discarded = list( set(self.clusters_ids.keys()).intersection(set(discarded)) )
 
         logging.debug(f"Plotting gains noise for station {station}")
 
@@ -442,43 +588,83 @@ class PlotGains:
             axis=1,
         )
 
-        c_sel = np.where(s_gain > 1e-3)[0]
+        # c_sel = np.where(s_gain > 1e-3)[0]
+        # logging.info(f"clusters to plot: {c_sel}")
 
-        fig, ax = plt.subplots(figsize=(6, 5), dpi=150)
+        fig, ax = plt.subplots(figsize=(7, 7), dpi=300)
 
         cm1 = plt.get_cmap("viridis")
         norm = LogNorm(vmin=1, vmax=10)
         ncp = SkyCoord(ra=0 * u.deg, dec=90.0 * u.deg)
 
-        for c_id in c_sel:
-            c_sources = clusters_info[c_id]["sources"].values()
-            c_pos = SkyCoord(
-                ra=np.array([s["Ra"] for s in c_sources]) * u.rad,
-                dec=np.array([s["Dec"] for s in c_sources]) * u.rad,
-            )
-            c_pos_offsets = ncp.spherical_offsets_to(c_pos)
-            im = ax.scatter(
-                -c_pos_offsets[0].deg,
-                c_pos_offsets[1].deg,
-                norm=norm,
-                c=[m_gain[c_id] / s_gain[c_id]] * len(c_pos_offsets[0].deg),
-                cmap=cm1,
-                s=0.5,
-            )
-        cb = plt.colorbar(im, ax=ax)
-        cb.ax.set_xlabel("gain SNR", labelpad=10)
+        for cluster in clusters_info:
 
-        for uv in [4.5, 9, 13.5]:  # change for other redshifts
+            c_id = cluster["id"]  # index
+            if c_id not in [30, 105]:
+                c_sources = clusters_info[c_id]["sources"].values()
+                c_pos = SkyCoord(
+                    ra=np.array([s["Ra"] for s in c_sources]) * u.rad,
+                    dec=np.array([s["Dec"] for s in c_sources]) * u.rad,
+                )
+                c_pos_offsets = ncp.spherical_offsets_to(c_pos)
+                x = -c_pos_offsets[0].deg
+                y = c_pos_offsets[1].deg
+                im = ax.scatter(
+                    x,
+                    y,
+                    norm=norm,
+                    c=[m_gain[c_id] / s_gain[c_id]] * len(c_pos_offsets[0].deg),
+                    cmap=cm1,
+                    s=0.5,
+                )
+
+                if len(x) > 2:
+                    c_id_color = "r" if c_id in peculiar_clusters else "k"
+                    xy = np.hstack((x[:, np.newaxis], y[:, np.newaxis]))
+                    hull = ConvexHull(xy)
+                    for simplex in hull.simplices:
+                        plt.plot(
+                            xy[simplex, 0], xy[simplex, 1], c_id_color, ls="-", lw=0.3
+                        )
+
+                    cluster_center = SkyCoord(
+                        ra=clusters_info[c_id]["Ra"] * u.rad,
+                        dec=clusters_info[c_id]["Dec"] * u.rad,
+                    )
+                    cluster_center_offset = ncp.spherical_offsets_to(cluster_center)
+
+                    logging.debug(
+                        f"{c_id}: {-cluster_center_offset[0].deg}, {cluster_center_offset[1].deg}"
+                    )
+                    ax.text(
+                        -cluster_center_offset[0].deg,
+                        cluster_center_offset[1].deg,
+                        f"{c_id}",
+                        va="top",
+                        ha="left",
+                        fontsize=4,
+                    )
+                else:
+                    logging.info(
+                        f"Cluster {c_id} has less than 3 components. Cannot plot boundary."
+                    )
+
+        if show_cbar:
+            cb = plt.colorbar(im, ax=ax)
+            cb.ax.set_xlabel("gain SNR", labelpad=10)
+
+        # for uv in [4.5, 9, 13.5]:  # change for other redshifts
+        for uv in [3.8, 7.6, 11.4]:  # change for other redshifts
             ax.add_artist(
                 plt.Circle([0, 0], uv, ls="--", fc=None, ec="k", fill=False, lw=0.4)
             )
-            ax.set_xlim(-15, 15)
-            ax.set_ylim(-15, 15)
-            ax.set_xlabel("l [degrees]")
-            ax.set_ylabel("m [degrees]")
-        ax.set_title(f"Station: {station}")
-        fig.tight_layout()
-
+        ax.set_xlim(-18, 18)
+        ax.set_ylim(-18, 18)
+        ax.set_axis_off()
+        # ax.set_xlabel("l [degrees]")
+        # ax.set_ylabel("m [degrees]")
+        # ax.set_title(f"Station: {station}")
+        # fig.tight_layout()
         return fig
 
     def cluster_stats(self, gain_data, pol="XX"):
