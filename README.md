@@ -1,3 +1,3 @@
-# Sagecal Gains Explorer (SGE)
+# Sagecal Gains explorer (Sgains)
 
-This is a tool to interprete and analyze sagecal gains
+This is a tool to read, interprete and visualize sagecal gains
